@@ -1,101 +1,150 @@
-import Image from "next/image";
+'use client'
+
+import Script from 'next/script'
+import { useEffect, useRef, useState, useCallback } from 'react'
 
 export default function Home() {
-  return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+  const mapRef = useRef<HTMLDivElement>(null)
+  const [subscription, setSubscription] = useState<PushSubscription | null>(null)
+  const [lat, setLat] = useState(35.6895)
+  const [lng, setLng] = useState(139.6917)
+  const [map, setMap] = useState<google.maps.Map | null>(null)
+  const [marker, setMarker] = useState<google.maps.Marker | null>(null)
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
-  );
+  useEffect(() => {
+    if (typeof window.google === 'undefined' || !mapRef.current) return
+
+    const newMap = new google.maps.Map(mapRef.current, {
+      center: { lat, lng },
+      zoom: 15,
+    })
+
+    const newMarker = new google.maps.Marker({
+      position: { lat, lng },
+      map: newMap,
+    })
+
+    setMap(newMap)
+    setMarker(newMarker)
+
+    watchPosition({ lat, lng })
+  }, [lat, lng])
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator && 'PushManager' in window) {
+      navigator.serviceWorker.register('/sw.js').then((registration) => {
+        console.log('Service Worker registered with scope:', registration.scope);
+        const subscribeOptions = {
+          userVisibleOnly: true,
+          applicationServerKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+        };
+
+        registration.pushManager.subscribe(subscribeOptions)
+            .then(setSubscription)
+            .catch(error => console.error('プッシュ通知の購読に失敗しました:', error));
+      });
+    }
+  }, []);
+
+  const watchPosition = useCallback((targetPosition: { lat: number, lng: number }) => {
+    navigator.geolocation.watchPosition(
+        (position) => {
+          const distance = calculateDistance(
+              position.coords.latitude,
+              position.coords.longitude,
+              targetPosition.lat,
+              targetPosition.lng
+          )
+
+          if (distance < 1000 && subscription) { // 1km以内に近づいた場合
+            sendTestPushNotification();
+          }
+        },
+        (error) => {
+          console.error('位置情報の取得に失敗しました:', error)
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 5000,
+          maximumAge: 0
+        }
+    )
+  }, [subscription])
+
+  function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371; // 地球の半径（キロメートル）
+
+    const dLat = degToRad(lat2 - lat1);
+    const dLon = degToRad(lon2 - lon1);
+
+    const a =
+              Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(degToRad(lat1)) * Math.cos(degToRad(lat2)) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+    // メートルに変換
+    return R * c * 1000;
+  }
+
+  function degToRad(deg: number): number {
+    return deg * (Math.PI / 180);
+  }
+
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const newLat = parseFloat((e.currentTarget.elements.namedItem('lat') as HTMLInputElement).value)
+    const newLng = parseFloat((e.currentTarget.elements.namedItem('lng') as HTMLInputElement).value)
+    if (!isNaN(newLat) && !isNaN(newLng)) {
+      setLat(newLat)
+      setLng(newLng)
+      if (map && marker) {
+        map.setCenter({ lat: newLat, lng: newLng })
+        marker.setPosition({ lat: newLat, lng: newLng })
+      }
+    }
+  }
+
+  const sendTestPushNotification = useCallback(() => {
+    if (subscription) {
+      const payload = JSON.stringify({
+        title: 'テスト通知',
+        body: '目的地に近づきました！'
+      });
+
+      navigator.serviceWorker.ready.then(registration => {
+        if (registration.active) {
+          registration.active.postMessage({
+            type: 'PUSH',
+            payload: payload
+          });
+        } else {
+          console.error('アクティブなService Workerが見つかりません');
+        }
+      }).catch(error => {
+        console.error('Service Workerへのメッセージ送信に失敗しました:', error);
+      });
+    } else {
+      console.error('プッシュ通知の購読情報がありません');
+    }
+  }, [subscription]);
+
+  return (
+      <>
+        <Script
+            src={`https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}`}
+            strategy="beforeInteractive"
+        />
+        <form onSubmit={handleSubmit}>
+          <label htmlFor="lat">緯度: </label>
+          <input id="lat" type="number" name="lat" placeholder="緯度" step="any" required/>
+          <label htmlFor="lng">経度: </label>
+          <input id="lng" type="number" name="lng" placeholder="経度" step="any" required/>
+          <button type="submit">座標を設定</button>
+        </form>
+        <div ref={mapRef} style={{ height: '400px', width: '100%' }}/>
+        <button onClick={sendTestPushNotification}>テスト通知を送信</button>
+      </>
+  )
 }
