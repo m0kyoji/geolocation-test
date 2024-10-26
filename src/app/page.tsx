@@ -10,6 +10,9 @@ export default function Home() {
   const [lng, setLng] = useState(139.6917)
   const [map, setMap] = useState<google.maps.Map | null>(null)
   const [marker, setMarker] = useState<google.maps.Marker | null>(null)
+  const [distance, setDistance] = useState<number | null>(null)
+  const [triggerDistance, setTriggerDistance] = useState(1000) // デフォルトで1km
+  const [latLngInput, setLatLngInput] = useState('')
 
   useEffect(() => {
     if (typeof window.google === 'undefined' || !mapRef.current) return
@@ -27,37 +30,60 @@ export default function Home() {
     setMap(newMap)
     setMarker(newMarker)
 
-    watchPosition({ lat, lng })
+    const watchId = watchPosition({ lat, lng })
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId)
+    }
   }, [lat, lng])
 
   useEffect(() => {
     if ('serviceWorker' in navigator && 'PushManager' in window) {
-      navigator.serviceWorker.register('/sw.js').then((registration) => {
-        console.log('Service Worker registered with scope:', registration.scope);
-        const subscribeOptions = {
-          userVisibleOnly: true,
-          applicationServerKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
-        };
+      let swRegistration: ServiceWorkerRegistration;
 
-        registration.pushManager.subscribe(subscribeOptions)
-            .then(setSubscription)
-            .catch(error => console.error('プッシュ通知の購読に失敗しました:', error));
-      });
+      navigator.serviceWorker.register('/sw.js')
+          .then((registration) => {
+            console.log('Service Worker registered:', registration);
+            swRegistration = registration; // registration を保存
+            return navigator.serviceWorker.ready;
+          })
+          .then(() => {
+            console.log('Service Worker is ready');
+            return swRegistration.pushManager.getSubscription();
+          })
+          .then((existingSubscription) => {
+            if (existingSubscription) {
+              console.log('既存の購読:', existingSubscription);
+              setSubscription(existingSubscription);
+              return existingSubscription;
+            }
+            console.log('新規購読を作成します');
+            return swRegistration.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+            });
+          })
+          .then((newSubscription) => {
+            console.log('購読成功:', newSubscription);
+            setSubscription(newSubscription);
+          })
+          .catch((error) => console.error('プッシュ通知の設定中にエラーが発生しました:', error));
     }
   }, []);
 
   const watchPosition = useCallback((targetPosition: { lat: number, lng: number }) => {
-    navigator.geolocation.watchPosition(
+    return navigator.geolocation.watchPosition(
         (position) => {
-          const distance = calculateDistance(
+          const newDistance = calculateDistance(
               position.coords.latitude,
               position.coords.longitude,
               targetPosition.lat,
               targetPosition.lng
           )
+          setDistance(newDistance)
 
-          if (distance < 1000 && subscription) { // 1km以内に近づいた場合
-            sendTestPushNotification();
+          if (newDistance < triggerDistance && subscription) {
+            sendPushNotification(`目的地まであと${newDistance.toFixed(0)}m`);
           }
         },
         (error) => {
@@ -69,7 +95,7 @@ export default function Home() {
           maximumAge: 0
         }
     )
-  }, [subscription])
+  }, [subscription, triggerDistance])
 
   function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const R = 6371; // 地球の半径（キロメートル）
@@ -106,11 +132,21 @@ export default function Home() {
     }
   }
 
-  const sendTestPushNotification = useCallback(() => {
+  const handleLatLngInputSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const [newLat, newLng] = latLngInput.split(',').map(coord => parseFloat(coord.trim()))
+    if (!isNaN(newLat) && !isNaN(newLng)) {
+      updateMapAndMarker(newLat, newLng)
+    } else {
+      console.error('Invalid latitude or longitude')
+    }
+  }
+
+  const sendPushNotification = useCallback((message: string) => {
     if (subscription) {
       const payload = JSON.stringify({
-        title: 'テスト通知',
-        body: '目的地に近づきました！'
+        title: '目的地に近づきました',
+        body: message
       });
 
       navigator.serviceWorker.ready.then(registration => {
@@ -130,21 +166,57 @@ export default function Home() {
     }
   }, [subscription]);
 
+  const updateMapAndMarker = (newLat: number, newLng: number) => {
+    if (!isNaN(newLat) && !isNaN(newLng)) {
+      setLat(newLat)
+      setLng(newLng)
+      if (map && marker) {
+        map.setCenter({ lat: newLat, lng: newLng })
+        marker.setPosition({ lat: newLat, lng: newLng })
+      }
+    }
+  }
+
   return (
       <>
         <Script
-            src={`https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}`}
+            src={ `https://maps.googleapis.com/maps/api/js?key=${ process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY }` }
             strategy="beforeInteractive"
         />
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={ handleSubmit }>
           <label htmlFor="lat">緯度: </label>
           <input id="lat" type="number" name="lat" placeholder="緯度" step="any" required/>
           <label htmlFor="lng">経度: </label>
           <input id="lng" type="number" name="lng" placeholder="経度" step="any" required/>
           <button type="submit">座標を設定</button>
         </form>
-        <div ref={mapRef} style={{ height: '400px', width: '100%' }}/>
-        <button onClick={sendTestPushNotification}>テスト通知を送信</button>
+        <form onSubmit={ handleLatLngInputSubmit }>
+          <label htmlFor="latLng">緯度,経度（カンマ区切り）: </label>
+          <input
+              id="latLng"
+              type="text"
+              value={ latLngInput }
+              onChange={ (e) => setLatLngInput(e.target.value) }
+              placeholder="例: 35.6895, 139.6917"
+              required
+          />
+          <button type="submit">座標を設定</button>
+        </form>
+        <div>
+          <label htmlFor="trigger">通知トリガー距離 (m): </label>
+          <input
+              id="trigger"
+              type="number"
+              value={ triggerDistance }
+              onChange={ (e) => setTriggerDistance(Number(e.target.value)) }
+              min="1"
+              step="1"
+          />
+        </div>
+        { distance !== null && (
+            <p>目的地までの距離: { distance.toFixed(0) }m</p>
+        ) }
+        <div ref={ mapRef } style={ { height: '400px', width: '100%' } }/>
       </>
   )
 }
