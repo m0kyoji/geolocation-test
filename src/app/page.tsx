@@ -217,6 +217,9 @@ export default function Home() {
             <p>目的地までの距離: { distance.toFixed(0) }m</p>
         ) }
         <div ref={ mapRef } style={ { height: '400px', width: '100%' } }/>
+        <div>
+          <button onClick={ () => sendPushNotification('テスト送信')}>テスト通知を送信</button>
+        </div>
       </>
   )
 }
